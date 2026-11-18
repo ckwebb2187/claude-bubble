@@ -27,7 +27,9 @@ import android.view.ViewAnimationUtils
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowManager
+import android.view.animation.AccelerateInterpolator
 import android.view.animation.DecelerateInterpolator
+import android.view.animation.OvershootInterpolator
 import android.view.inputmethod.InputMethodManager
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
@@ -232,6 +234,26 @@ class PanelWindow(
         reveal?.cancel()
         c.animate().cancel()
         c.pivotX = ox.toFloat(); c.pivotY = oy.toFloat()
+        when (prefs.windowAnim) {
+            "pop" -> {
+                c.scaleX = 0.3f; c.scaleY = 0.3f; c.alpha = 0f
+                c.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(340)
+                    .setInterpolator(OvershootInterpolator(1.3f)).start()
+                return
+            }
+            "unroll" -> {
+                c.scaleX = 0.92f; c.scaleY = 0.06f; c.alpha = 0.6f
+                c.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(320)
+                    .setInterpolator(DecelerateInterpolator(1.8f)).start()
+                return
+            }
+            "fade" -> {
+                c.scaleX = 0.97f; c.scaleY = 0.97f; c.alpha = 0f
+                c.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(220)
+                    .setInterpolator(DecelerateInterpolator()).start()
+                return
+            }
+        }
         c.scaleX = 0.82f; c.scaleY = 0.82f
         c.alpha = 1f
         c.animate().scaleX(1f).scaleY(1f).setDuration(300).setInterpolator(DecelerateInterpolator(1.6f)).start()
@@ -267,6 +289,14 @@ class PanelWindow(
         reveal?.cancel()
         c.animate().cancel()
         c.pivotX = ox.toFloat(); c.pivotY = oy.toFloat()
+        when (prefs.windowAnim) {
+            "pop" -> { c.animate().scaleX(0.3f).scaleY(0.3f).alpha(0f).setDuration(200)
+                .setInterpolator(AccelerateInterpolator(1.4f)).withEndAction(hide).start(); return }
+            "unroll" -> { c.animate().scaleX(0.92f).scaleY(0.06f).alpha(0.4f).setDuration(220)
+                .setInterpolator(AccelerateInterpolator(1.4f)).withEndAction(hide).start(); return }
+            "fade" -> { c.animate().scaleX(0.97f).scaleY(0.97f).alpha(0f).setDuration(180)
+                .setInterpolator(AccelerateInterpolator()).withEndAction(hide).start(); return }
+        }
         c.animate().scaleX(0.82f).scaleY(0.82f).setDuration(210).start()
         val anim = runCatching {
             ViewAnimationUtils.createCircularReveal(c, ox, oy, farthestCorner(c, ox, oy), orbSize() / 2f).apply {

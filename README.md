@@ -39,8 +39,15 @@ Its look and personality borrow from Nova Apex: color themes, eye styles, blinki
 
 ## Customize (in the app)
 
-Theme (29, most from Nova Apex), core (Orb, Ring, Plasma, Jelly), eyes, blinking, size, personality
-(Quirky, Calm, Face off), what a tap does, which app to open, start on boot, fade when idle.
+The settings page is dark and split into four tabs:
+
+- **Look**: theme (29, most from Nova Apex), core (Orb, Ring, Plasma, Jelly), eyes, size.
+- **Motion**: personality (Quirky, Calm, Face off); resting motion (Float, Bounce, Breathe, Sway, Drift, Still);
+  while you type or talk (Ripples, Sound wave, Glow, Orbiting dots); while Claude answers (Sparkles, Equalizer
+  mouth, Spin ring, Shimmer); blinking; how the chat window opens (Grow, Pop, Unroll, Fade); speed
+  (Slow, Normal, Fast). Picking an effect plays it on the preview, and "Try it" plays any of them.
+- **Behavior**: what a tap does, which app to open, start on boot, fade when idle, reset the window, sign out.
+- **More**: updates, how it works, and the alarm and mic rules.
 
 ## Install
 

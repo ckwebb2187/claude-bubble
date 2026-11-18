@@ -34,6 +34,11 @@ class CompanionView(context: Context) : View(context) {
     var blinkStyle = "normal"
     var persona = "quirky"
     var coreStyle = "orb"
+    var idleMotion = "float"
+    var listenFx = "ripples"
+    var talkFx = "sparkles"
+    /** Multiplies how fast the looping motions run. */
+    var speed = 1f
 
     /** Which screen edge the companion rests on (it glances toward the middle). */
     var restingOnRight = true
@@ -74,6 +79,10 @@ class CompanionView(context: Context) : View(context) {
         blinkStyle = p.blink
         persona = p.persona
         coreStyle = p.core
+        idleMotion = p.idleMotion
+        listenFx = p.listenFx
+        talkFx = p.talkFx
+        speed = when (p.animSpeed) { "slow" -> 0.6f; "fast" -> 1.6f; else -> 1f }
         invalidate()
     }
 
@@ -93,6 +102,7 @@ class CompanionView(context: Context) : View(context) {
     private var lastFrame = 0L
     private var hueShift = 0f
     private var tilt = 0f              // head tilt in degrees (leans in while listening)
+    private var nextBounce = 2.5f      // idle "bounce" motion timer
 
     private data class Emote(val ch: String, var x: Float, var y: Float, var life: Float)
     private val emotes = ArrayList<Emote>()
@@ -179,8 +189,9 @@ class CompanionView(context: Context) : View(context) {
     // ----- Animation loop -----
 
     private fun step(dt: Float) {
-        t += dt
-        hueShift = (hueShift + dt * 40f) % 360f
+        val sdt = dt * speed               // looping motions follow the speed setting; springs don't
+        t += sdt
+        hueShift = (hueShift + sdt * 40f) % 360f
 
         // springs
         vq += (-q * 60f - vq * 7f) * dt; q += vq * dt * 1.2f
@@ -195,7 +206,7 @@ class CompanionView(context: Context) : View(context) {
         lookY += (tLookY - lookY) * min(1f, dt * 8f)
 
         // blinking
-        nextBlink -= dt
+        nextBlink -= sdt
         if (nextBlink <= 0f) {
             blink = if (blinkStyle == "never") 0f else 1f
             nextBlink = when (blinkStyle) {
@@ -210,7 +221,7 @@ class CompanionView(context: Context) : View(context) {
 
         if (moodT > 0f) { moodT -= dt; if (moodT <= 0f && mood != "sleep") mood = "normal" }
 
-        emotes.removeAll { it.y -= dt * 0.9f; it.life -= dt * 0.8f; it.life <= 0f }
+        emotes.removeAll { it.y -= sdt * 0.9f; it.life -= sdt * 0.8f; it.life <= 0f }
 
         // lean in while listening
         val tiltTarget = if (activity == "listening") (if (restingOnRight) -8f else 8f) else 0f
@@ -219,10 +230,15 @@ class CompanionView(context: Context) : View(context) {
         // idle life
         idle += dt
         if (activity != "idle") idle = 0f
+        if (activity == "talking" && talkFx == "sparkles" && Random.nextFloat() < sdt * 0.35f) emote(listOf("♪", "✦", "✧").random())
+        if (idleMotion == "bounce" && activity == "idle" && mood != "sleep") {
+            nextBounce -= sdt
+            if (nextBounce <= 0f) { hop(0.55f); nextBounce = 2.2f + Random.nextFloat() * 1.6f }
+        }
         if (!faceOn) return
         if (activity == "listening") {
             // attentive: eyes stay on the chat, with tiny movements
-            nextGlance -= dt
+            nextGlance -= sdt
             if (nextGlance <= 0f) {
                 tLookX = (if (restingOnRight) -0.6f else 0.6f) + (Random.nextFloat() - 0.5f) * 0.2f
                 tLookY = -0.25f + (Random.nextFloat() - 0.5f) * 0.15f
@@ -230,7 +246,6 @@ class CompanionView(context: Context) : View(context) {
             }
             return
         }
-        if (activity == "talking" && quirky && Random.nextFloat() < dt * 0.25f) emote(listOf("♪", "✦").random())
         if (quirky && idle > 75f && mood != "sleep") setMood("sleep", 0f)
         if (mood == "sleep") {
             tLookX = 0f; tLookY = 0.3f
@@ -277,13 +292,18 @@ class CompanionView(context: Context) : View(context) {
 
         val w = width.toFloat(); val h = height.toFloat()
         val r = min(w, h) / 2f / 1.32f          // orb radius; the rest is room for glow and emotes
-        val cx = w / 2f
+        var driftX = 0f; var sway = 0f; var breathe = 1f
         val bob = when {
             mood == "sleep" -> sin(t * 1.3f) * r * 0.04f
             activity == "talking" -> sin(t * 6.5f) * r * 0.035f
             activity == "listening" -> sin(t * 3.2f) * r * 0.025f
+            idleMotion == "still" || idleMotion == "bounce" -> 0f
+            idleMotion == "breathe" -> { breathe = 1f + 0.05f * sin(t * 1.7f); 0f }
+            idleMotion == "sway" -> { sway = sin(t * 1.6f) * 8f; sin(t * 3.2f) * r * 0.015f }
+            idleMotion == "orbit" -> { driftX = cos(t * 1.3f) * r * 0.07f; sin(t * 1.3f) * r * 0.06f }
             else -> sin(t * 2f) * r * 0.035f
         }
+        val cx = w / 2f + driftX
         val cy = h / 2f + bob - hopY * r * 0.12f
         val (p, a) = colors()
 
@@ -297,22 +317,15 @@ class CompanionView(context: Context) : View(context) {
         val pulse = 0.85f + 0.15f * sin(t * pulseSpeed)
         glowPaint.shader = RadialGradient(cx, cy, r * 1.3f,
             intArrayOf(withAlpha(a, (150 * pulse).toInt()), withAlpha(a, 0)), floatArrayOf(0.55f, 1f), Shader.TileMode.CLAMP)
-        canvas.drawCircle(cx, cy, r * 1.3f, glowPaint)
+        canvas.drawCircle(cx, cy, r * 1.3f * breathe, glowPaint)
 
-        // listening: soft ripples coming in toward the orb, like it's taking in what you say
-        if (activity == "listening") {
-            ringPaint.shader = null
-            ringPaint.strokeWidth = r * 0.05f
-            for (i in 0 until 2) {
-                val ph = ((t * 0.8f + i * 0.5f) % 1f)
-                ringPaint.color = withAlpha(Color.WHITE, (110 * ph).toInt())
-                canvas.drawCircle(cx, cy, r * (1.32f - ph * 0.26f), ringPaint)
-            }
-        }
+        if (activity == "listening") drawListening(canvas, cx, cy, r, a)
+        if (activity == "talking" && talkFx == "shimmer") drawShimmer(canvas, cx, cy, r)
 
         // body with jelly squash (anchored at the bottom)
         canvas.save()
-        if (abs(tilt) > 0.05f) canvas.rotate(tilt, cx, cy + r)
+        if (abs(tilt + sway) > 0.05f) canvas.rotate(tilt + sway, cx, cy + r)
+        if (breathe != 1f) canvas.scale(breathe, breathe, cx, cy)
         val sx = 1f + q; val sy = 1f - q
         canvas.scale(sx, sy, cx, cy + r)
         when (coreStyle) {
@@ -332,7 +345,10 @@ class CompanionView(context: Context) : View(context) {
         canvas.save(); canvas.rotate(-25f, rect.centerX(), rect.centerY()); canvas.drawOval(rect, hiPaint); canvas.restore()
 
         if (faceOn) drawFace(canvas, cx, cy, r, p)
+        else if (activity == "talking" && talkFx == "equalizer") drawBars(canvas, cx, cy, r, Color.WHITE)
         canvas.restore()
+
+        if (activity == "talking" && talkFx == "spin") drawSpin(canvas, cx, cy, r, a)
 
         // emotes float above
         emotePaint.textSize = r * 0.62f
@@ -359,6 +375,90 @@ class CompanionView(context: Context) : View(context) {
                 activity != "idle" || abs(tilt) > 0.05f
             if (busy) postInvalidateOnAnimation() else postInvalidateDelayed(66)
         }
+    }
+
+    /** While you type or talk into the chat. */
+    private fun drawListening(c: Canvas, cx: Float, cy: Float, r: Float, a: Int) {
+        ringPaint.shader = null
+        when (listenFx) {
+            "wave" -> {
+                // a ring that ripples like a sound wave
+                path.reset()
+                val n = 72
+                val amp = r * 0.07f * (0.6f + 0.4f * sin(t * 3.1f))
+                for (i in 0..n) {
+                    val ang = (i.toFloat() / n) * 2f * PI.toFloat()
+                    val rr = r * 1.16f + amp * sin(ang * 8f + t * 7f) * sin(ang * 3f - t * 2f)
+                    val x = cx + cos(ang) * rr; val y = cy + sin(ang) * rr
+                    if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                }
+                path.close()
+                ringPaint.strokeWidth = r * 0.05f
+                ringPaint.color = withAlpha(Color.WHITE, 150)
+                c.drawPath(path, ringPaint)
+            }
+            "glow" -> {
+                // the aura swells and flares
+                val f = 0.5f + 0.5f * sin(t * 4.5f)
+                glowPaint.shader = RadialGradient(cx, cy, r * 1.32f,
+                    intArrayOf(withAlpha(Color.WHITE, (90 + 90 * f).toInt()), withAlpha(a, (60 * f).toInt()), withAlpha(a, 0)),
+                    floatArrayOf(0.6f, 0.82f, 1f), Shader.TileMode.CLAMP)
+                c.drawCircle(cx, cy, r * 1.32f, glowPaint)
+            }
+            "orbit" -> {
+                // three dots circling the orb
+                eyePaint.color = Color.WHITE
+                for (i in 0 until 3) {
+                    val ang = t * 3.2f + i * (2f * PI.toFloat() / 3f)
+                    val rr = r * 1.16f
+                    eyePaint.alpha = 200
+                    c.drawCircle(cx + cos(ang) * rr, cy + sin(ang) * rr, r * (0.07f + 0.02f * sin(t * 5f + i)), eyePaint)
+                }
+                eyePaint.alpha = 255
+            }
+            else -> {
+                // soft ripples coming in toward the orb, like it's taking in what you say
+                ringPaint.strokeWidth = r * 0.05f
+                for (i in 0 until 2) {
+                    val ph = ((t * 0.8f + i * 0.5f) % 1f)
+                    ringPaint.color = withAlpha(Color.WHITE, (110 * ph).toInt())
+                    c.drawCircle(cx, cy, r * (1.32f - ph * 0.26f), ringPaint)
+                }
+            }
+        }
+    }
+
+    /** Equalizer bars, used as the mouth while Claude answers. */
+    private fun drawBars(c: Canvas, mx: Float, my: Float, r: Float, color: Int) {
+        eyePaint.color = color
+        val bw = r * 0.05f; val gap = r * 0.085f
+        for (i in -2..2) {
+            val hgt = r * (0.05f + 0.13f * abs(sin(t * (7f + i * 1.3f) + i * 1.1f)))
+            rect.set(mx + i * gap - bw / 2f, my - hgt, mx + i * gap + bw / 2f, my + hgt)
+            c.drawRoundRect(rect, bw / 2f, bw / 2f, eyePaint)
+        }
+    }
+
+    /** Two bright arcs spinning around the orb while Claude answers. */
+    private fun drawSpin(c: Canvas, cx: Float, cy: Float, r: Float, a: Int) {
+        ringPaint.strokeWidth = r * 0.07f
+        ringPaint.shader = SweepGradient(cx, cy, intArrayOf(withAlpha(a, 0), withAlpha(Color.WHITE, 230), withAlpha(a, 0)), null)
+        c.save(); c.rotate((t * 320f) % 360f, cx, cy)
+        rect.set(cx - r * 1.16f, cy - r * 1.16f, cx + r * 1.16f, cy + r * 1.16f)
+        c.drawArc(rect, 0f, 110f, false, ringPaint)
+        c.drawArc(rect, 180f, 110f, false, ringPaint)
+        c.restore()
+        ringPaint.shader = null
+    }
+
+    /** A rainbow sheen sweeping around the aura while Claude answers. */
+    private fun drawShimmer(c: Canvas, cx: Float, cy: Float, r: Float) {
+        val hues = IntArray(7) { i -> Color.HSVToColor(140, floatArrayOf((hueShift * 2f + i * 60f) % 360f, 0.6f, 1f)) }
+        hues[6] = hues[0]
+        glowPaint.shader = SweepGradient(cx, cy, hues, null)
+        c.save(); c.rotate((t * 90f) % 360f, cx, cy)
+        c.drawCircle(cx, cy, r * 1.22f, glowPaint)
+        c.restore()
     }
 
     private fun drawRing(c: Canvas, cx: Float, cy: Float, r: Float, a: Int) {
@@ -441,6 +541,10 @@ class CompanionView(context: Context) : View(context) {
         val my = cy + r * 0.32f + lookY * r * 0.06f
         strokePaint.strokeWidth = r * 0.07f
         path.reset()
+        if (activity == "talking" && talkFx == "equalizer" && mood != "sleep" && mood != "dizzy") {
+            drawBars(c, mx, my, r, ink)
+            return
+        }
         if (activity == "talking" && mood != "sleep" && mood != "dizzy") {
             // mouth moves while Claude answers
             val open = (0.2f + 0.8f * abs(sin(t * 9f)) * (0.65f + 0.35f * sin(t * 2.3f))).coerceIn(0.1f, 1f)

@@ -67,6 +67,20 @@ object Looks {
         Option("orb", "Glow orb"), Option("ring", "Halo ring"),
         Option("plasma", "Plasma"), Option("jelly", "Jelly"),
     )
+    val idle = listOf(
+        Option("float", "Float"), Option("bounce", "Bounce"), Option("breathe", "Breathe"),
+        Option("sway", "Sway"), Option("orbit", "Drift"), Option("still", "Still"),
+    )
+    val listen = listOf(
+        Option("ripples", "Ripples"), Option("wave", "Sound wave"), Option("glow", "Glow"), Option("orbit", "Orbiting dots"),
+    )
+    val talk = listOf(
+        Option("sparkles", "Sparkles"), Option("equalizer", "Equalizer"), Option("spin", "Spin ring"), Option("shimmer", "Shimmer"),
+    )
+    val speed = listOf(Option("slow", "Slow"), Option("normal", "Normal"), Option("fast", "Fast"))
+    val window = listOf(
+        Option("grow", "Grow"), Option("pop", "Pop"), Option("unroll", "Unroll"), Option("fade", "Fade"),
+    )
     val moods = listOf(
         Option("happy", "Happy"), Option("love", "Love"), Option("surprised", "Surprised"),
         Option("starry", "Starry"), Option("smug", "Smug"), Option("confused", "Confused"),

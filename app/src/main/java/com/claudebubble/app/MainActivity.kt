@@ -42,144 +42,203 @@ class MainActivity : Activity() {
     private lateinit var preview: CompanionView
     private val refreshers = ArrayList<() -> Unit>()
 
-    private val ink = Color.parseColor("#1F1E1B")
-    private val muted = Color.parseColor("#6B6862")
+    private val ink = Color.parseColor("#F2EFE9")
+    private val muted = Color.parseColor("#9C978E")
     private val accent = Color.parseColor("#D97757")
-    private val card = Color.WHITE
+    private val card = Color.parseColor("#1F1E1C")
+    private val chipOff = Color.parseColor("#2C2A27")
+    private val bg = Color.parseColor("#141311")
+
+    private val tabs = linkedMapOf<String, LinearLayout>()
+    private val tabViews = ArrayList<TextView>()
+    private var tab = "look"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
+        window.statusBarColor = bg
+        window.navigationBarColor = bg
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(24), dp(18), dp(32))
+            setPadding(dp(16), dp(18), dp(16), dp(28))
         }
 
-        root.addView(text("Claude Bubble", 26f, ink, bold = true))
-        root.addView(text("A little companion that floats over your apps. Tap it to pop open Claude Duet, hold it for more.", 14f, muted).apply {
-            setPadding(0, dp(4), 0, dp(14))
+        // ----- Header: preview with the on/off switch under it -----
+        root.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(text("Claude Bubble", 22f, ink, bold = true), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(text("v${Updater.currentName(this@MainActivity)}", 12f, muted))
         })
-
-        // ----- Preview -----
         preview = CompanionView(this).apply { applyPrefs(prefs); restingOnRight = false }
         val stage = FrameLayout(this).apply {
-            background = rounded(Color.parseColor("#1F1E1B"), 22)
-            addView(preview, FrameLayout.LayoutParams(dp(150), dp(150), Gravity.CENTER))
+            background = rounded(Color.parseColor("#0C0B0A"), 20)
+            addView(preview, FrameLayout.LayoutParams(dp(124), dp(124), Gravity.CENTER))
             setOnClickListener { preview.tapped() }
             setOnLongClickListener { preview.petted(); true }
         }
-        root.addView(stage, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(190)))
-        root.addView(text("Tap the preview to poke it, hold to pet it.", 12f, muted).apply {
-            gravity = Gravity.CENTER; setPadding(0, dp(6), 0, dp(10))
-        })
+        root.addView(stage, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(150)).apply { topMargin = dp(10) })
 
-        // ----- On / off -----
-        val power = section(root, "Bubble")
-        statusText = text("", 14f, muted)
-        power.addView(statusText)
+        statusText = text("", 13f, muted)
+        toggleButton = button("Turn on", primary = true) {
+            if (BubbleService.isRunning) BubbleService.stop(this) else turnOn()
+            toggleButton.postDelayed({ refreshStatus() }, 250)
+        }.apply { layoutParams = LinearLayout.LayoutParams(dp(120), dp(40)) }
+        root.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), dp(10), 0, 0)
+            addView(statusText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(toggleButton)
+        })
         permButton = button("Allow display over other apps", primary = true) {
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
         }
-        power.addView(permButton)
-        toggleButton = button("Turn bubble on", primary = true) {
-            if (BubbleService.isRunning) BubbleService.stop(this) else turnOn()
-            toggleButton.postDelayed({ refreshStatus() }, 250)
+        root.addView(permButton)
+
+        // ----- Tabs -----
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = rounded(card, 14)
+            setPadding(dp(4), dp(4), dp(4), dp(4))
         }
-        power.addView(toggleButton)
-        power.addView(text("Tap does", 13f, muted, bold = true).apply { setPadding(0, dp(12), 0, dp(4)) })
-        power.addView(chips(listOf(Option("window", "Floating chat"), Option("app", "Open the app"), Option("look", "Look at my screen")),
-            { prefs.tapAction }) { prefs.tapAction = it })
-        power.addView(text("App to open", 13f, muted, bold = true).apply { setPadding(0, dp(12), 0, dp(4)) })
-        power.addView(chips(listOf(Option("duet", "Claude Duet"), Option("claude", "Claude")),
-            { prefs.appTarget }) { prefs.appTarget = it })
-        power.addView(switch("Turn on when the phone starts", prefs.startOnBoot) { prefs.startOnBoot = it })
-        power.addView(switch("Fade when idle", prefs.fadeIdle) { prefs.fadeIdle = it })
+        root.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(14) })
+        for ((key, label) in listOf("look" to "Look", "motion" to "Motion", "behave" to "Behavior", "more" to "More")) {
+            val tv = TextView(this).apply {
+                text = label; textSize = 14f; gravity = Gravity.CENTER; tag = key
+                setPadding(0, dp(9), 0, dp(9))
+                setOnClickListener { showTab(key) }
+            }
+            tabViews.add(tv)
+            bar.addView(tv, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val box = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(14), dp(4), dp(14), dp(14))
+                background = rounded(card, 18)
+            }
+            tabs[key] = box
+            root.addView(box, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
+        }
 
-        // ----- Look -----
-        val look = section(root, "Look")
-        look.addView(label("Theme"))
-        look.addView(swatches())
-        look.addView(label("Core"))
-        look.addView(chips(Looks.core, { prefs.core }) { prefs.core = it; preview.applyPrefs(prefs) })
-        look.addView(label("Eyes"))
-        look.addView(chips(Looks.eyes, { prefs.eyes }) { prefs.eyes = it; preview.applyPrefs(prefs) })
-        look.addView(label("Blinking"))
-        look.addView(chips(Looks.blink, { prefs.blink }) { prefs.blink = it; preview.applyPrefs(prefs) })
-        look.addView(label("Size"))
-        val sizeVal = text("${prefs.sizeDp} dp", 13f, muted)
-        look.addView(sizeVal)
-        look.addView(SeekBar(this).apply {
-            max = 96 - 44
-            progress = prefs.sizeDp - 44
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) { sizeVal.text = "${p + 44} dp" }
-                override fun onStartTrackingTouch(s: SeekBar?) {}
-                override fun onStopTrackingTouch(s: SeekBar?) { prefs.sizeDp = progress + 44 }
+        // Look
+        tabs["look"]!!.apply {
+            addView(label("Theme"))
+            addView(swatches())
+            addView(label("Core"))
+            addView(chips(Looks.core, { prefs.core }) { prefs.core = it; preview.applyPrefs(prefs) })
+            addView(label("Eyes"))
+            addView(chips(Looks.eyes, { prefs.eyes }) { prefs.eyes = it; preview.applyPrefs(prefs) })
+            val sizeLabel = label("Size  ${prefs.sizeDp} dp")
+            addView(sizeLabel)
+            addView(SeekBar(this@MainActivity).apply {
+                max = 96 - 44
+                progress = prefs.sizeDp - 44
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) { sizeLabel.text = "Size  ${p + 44} dp" }
+                    override fun onStartTrackingTouch(s: SeekBar?) {}
+                    override fun onStopTrackingTouch(s: SeekBar?) { prefs.sizeDp = progress + 44 }
+                })
+                refreshers.add { progress = prefs.sizeDp - 44; sizeLabel.text = "Size  ${prefs.sizeDp} dp" }
             })
-            refreshers.add { progress = prefs.sizeDp - 44; sizeVal.text = "${prefs.sizeDp} dp" }
-        })
+            addView(button("Reset look and motion", primary = false) {
+                prefs.resetLook(); preview.applyPrefs(prefs); refreshers.forEach { it() }
+            })
+        }
 
-        // ----- Personality -----
-        val pers = section(root, "Personality")
-        pers.addView(chips(Looks.persona, { prefs.persona }) { prefs.persona = it; preview.applyPrefs(prefs) })
-        pers.addView(text("Quirky glances around, hops, gets dizzy when you shake it and dozes off when left alone. Calm keeps it chill.", 13f, muted).apply {
-            setPadding(0, dp(6), 0, dp(4))
-        })
-        pers.addView(label("Try a mood"))
-        pers.addView(chips(Looks.moods, { "" }) { preview.tryMood(it) })
-        pers.addView(button("Reset look", primary = false) {
-            prefs.resetLook(); preview.applyPrefs(prefs); refreshers.forEach { it() }
-        })
+        // Motion
+        tabs["motion"]!!.apply {
+            addView(label("Personality"))
+            addView(chips(Looks.persona, { prefs.persona }) { prefs.persona = it; preview.applyPrefs(prefs) })
+            addView(label("Resting"))
+            addView(chips(Looks.idle, { prefs.idleMotion }) { prefs.idleMotion = it; preview.applyPrefs(prefs) })
+            addView(label("While you type or talk"))
+            addView(chips(Looks.listen, { prefs.listenFx }) { prefs.listenFx = it; preview.applyPrefs(prefs); trial("listening") })
+            addView(label("While Claude answers"))
+            addView(chips(Looks.talk, { prefs.talkFx }) { prefs.talkFx = it; preview.applyPrefs(prefs); trial("talking") })
+            addView(label("Blinking"))
+            addView(chips(Looks.blink, { prefs.blink }) { prefs.blink = it; preview.applyPrefs(prefs) })
+            addView(label("Chat window opens with"))
+            addView(chips(Looks.window, { prefs.windowAnim }) { prefs.windowAnim = it })
+            addView(label("Speed"))
+            addView(chips(Looks.speed, { prefs.animSpeed }) { prefs.animSpeed = it; preview.applyPrefs(prefs) })
+            addView(label("Try it"))
+            addView(chips(listOf(Option("listening", "Listening"), Option("talking", "Answering")) + Looks.moods, { "" }) {
+                if (it == "listening" || it == "talking") trial(it) else preview.tryMood(it)
+            })
+        }
 
-        // ----- Floating chat -----
-        val chat = section(root, "Floating chat")
-        chat.addView(text(
-            "Claude Duet on the web, in a window over your apps. Drag its top bar to move it, the corner to resize, " +
-            "and tap ⌄, Back or the bubble to tuck it away. It stays signed in and keeps going while tucked: " +
-            "the bubble's mouth moves while Claude answers, and a dot shows when an answer is waiting.\n\n" +
-            "Signing in: use your email and the code Claude sends. Google's sign-in button doesn't work inside an app window.",
-            14f, ink))
-        chat.addView(button("Reset window size and spot", primary = false) {
-            prefs.resetPanel()
-            if (BubbleService.isRunning) startService(Intent(this, BubbleService::class.java).setAction(BubbleService.ACTION_RESET_PANEL))
-        })
-        chat.addView(button("Sign out of the floating chat", primary = false) {
-            if (BubbleService.isRunning) startService(Intent(this, BubbleService::class.java).setAction(BubbleService.ACTION_SIGN_OUT))
-            else { android.webkit.CookieManager.getInstance().removeAllCookies(null); android.webkit.WebStorage.getInstance().deleteAllData() }
-        })
+        // Behavior
+        tabs["behave"]!!.apply {
+            addView(label("Tap does"))
+            addView(chips(listOf(Option("window", "Floating chat"), Option("app", "Open the app"), Option("look", "Look at my screen")),
+                { prefs.tapAction }) { prefs.tapAction = it })
+            addView(label("App to open"))
+            addView(chips(listOf(Option("duet", "Claude Duet"), Option("claude", "Claude")),
+                { prefs.appTarget }) { prefs.appTarget = it })
+            addView(switch("Start when the phone starts", prefs.startOnBoot) { prefs.startOnBoot = it })
+            addView(switch("Fade when idle", prefs.fadeIdle) { prefs.fadeIdle = it })
+            addView(button("Reset chat window size and spot", primary = false) {
+                prefs.resetPanel()
+                if (BubbleService.isRunning) startService(Intent(this@MainActivity, BubbleService::class.java).setAction(BubbleService.ACTION_RESET_PANEL))
+            })
+            addView(button("Sign out of the floating chat", primary = false) {
+                if (BubbleService.isRunning) startService(Intent(this@MainActivity, BubbleService::class.java).setAction(BubbleService.ACTION_SIGN_OUT))
+                else { android.webkit.CookieManager.getInstance().removeAllCookies(null); android.webkit.WebStorage.getInstance().deleteAllData() }
+            })
+        }
 
-        // ----- Alarm safety -----
-        val safe = section(root, "Alarms and calls come first")
-        safe.addView(text(
-            "The mic only works while the floating chat is open and you tap its mic button. It lets go of the mic " +
-            "the moment you tuck the chat away, the screen turns off, or an alarm or call starts, and it never listens " +
-            "in the background. The chat can't play sound unless you tap something, " +
-            "goes quiet when you tuck it away or the screen turns off, and stops any sound the moment an alarm, " +
-            "ringtone or call starts.",
-            14f, ink))
+        // More
+        tabs["more"]!!.apply {
+            addView(label("Updates"))
+            updateText = text("Version ${Updater.currentName(this@MainActivity)}", 13f, muted)
+            addView(updateText)
+            updateButton = button("Check for updates", primary = false) { onUpdateButton() }
+            addView(updateButton)
+            addView(label("How it works"))
+            addView(text(
+                "• Tap: the floating chat (or what you set under Behavior).\n" +
+                "• Hold: menu with Look at my screen, Open the app, Pet, Customize and Hide.\n" +
+                "• Drag: move it; drop it on the X to hide it. Drag it while the chat is open to move the chat.\n" +
+                "• Sign in to the chat with your email and the code Claude sends; Google's button doesn't work there.",
+                13f, ink))
+            addView(label("Alarms and calls come first"))
+            addView(text(
+                "The mic only runs while the chat is open and you tap its mic. Tucking the chat, the screen going off, " +
+                "an alarm or a call stops all sound and the mic right away. Nothing listens in the background.",
+                13f, ink))
+        }
 
-        // ----- Updates -----
-        val upd = section(root, "Updates")
-        updateText = text("Version ${Updater.currentName(this)}", 14f, muted)
-        upd.addView(updateText)
-        updateButton = button("Check for updates", primary = false) { onUpdateButton() }
-        upd.addView(updateButton)
-
-        // ----- Help -----
-        val help = section(root, "How it works")
-        help.addView(text(
-            "• Tap: pop open the floating chat (or open the app, or look at your screen, if you set it that way).\n" +
-            "• Hold: menu with Floating chat, Look at my screen, Open the app, Pet, Customize and Hide.\n" +
-            "• Drag: move it. It snaps to the nearest side. Drag it onto the X to hide it.\n" +
-            "• Look at my screen: Android asks to allow a capture, then the screenshot goes into the floating chat " +
-            "(or the app), ready for your question.",
-            14f, ink))
-
+        showTab(tab)
         setContentView(ScrollView(this).apply {
-            setBackgroundColor(Color.parseColor("#F5F2EC"))
+            setBackgroundColor(bg)
             addView(root)
+            // Keep the page clear of the status and navigation bars on edge-to-edge phones.
+            setOnApplyWindowInsetsListener { v, insets ->
+                @Suppress("DEPRECATION")
+                v.setPadding(0, insets.systemWindowInsetTop, 0, insets.systemWindowInsetBottom)
+                insets
+            }
         })
+    }
+
+    /** Shows a listening or answering effect on the preview for a few seconds. */
+    private fun trial(kind: String) {
+        preview.activity = kind
+        preview.removeCallbacks(endTrial)
+        preview.postDelayed(endTrial, 3500)
+    }
+    private val endTrial = Runnable { preview.activity = "idle" }
+
+    private fun showTab(key: String) {
+        tab = key
+        tabs.forEach { (k, v) -> v.visibility = if (k == key) View.VISIBLE else View.GONE }
+        tabViews.forEach { tv ->
+            val on = tv.tag == key
+            tv.background = if (on) rounded(accent, 11) else null
+            tv.setTextColor(if (on) Color.WHITE else muted)
+            tv.typeface = if (on) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+        }
     }
 
     override fun onResume() {
@@ -246,7 +305,7 @@ class MainActivity : Activity() {
         permButton.visibility = if (allowed) View.GONE else View.VISIBLE
         toggleButton.isEnabled = allowed
         toggleButton.alpha = if (allowed) 1f else 0.4f
-        toggleButton.text = if (running) "Turn bubble off" else "Turn bubble on"
+        toggleButton.text = if (running) "Turn off" else "Turn on"
     }
 
     // ---------- small UI helpers ----------
@@ -262,7 +321,7 @@ class MainActivity : Activity() {
         return box
     }
 
-    private fun label(s: String) = text(s, 13f, muted, bold = true).apply { setPadding(0, dp(12), 0, dp(6)) }
+    private fun label(s: String) = text(s, 12f, muted, bold = true).apply { setPadding(0, dp(12), 0, dp(5)) }
 
     private fun text(s: String, size: Float, color: Int, bold: Boolean = false) = TextView(this).apply {
         text = s; textSize = size; setTextColor(color)
@@ -274,15 +333,15 @@ class MainActivity : Activity() {
         isAllCaps = false
         textSize = 15f
         setTextColor(if (primary) Color.WHITE else ink)
-        background = rounded(if (primary) accent else Color.parseColor("#ECE7DF"), 14)
+        background = rounded(if (primary) accent else chipOff, 14)
         stateListAnimator = null
         setOnClickListener { onClick() }
-        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(10) }
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(10) }
     }
 
     private fun switch(s: String, checked: Boolean, onChange: (Boolean) -> Unit) = Switch(this).apply {
-        text = s; textSize = 15f; setTextColor(ink); isChecked = checked
-        setPadding(0, dp(10), 0, dp(4))
+        text = s; textSize = 14f; setTextColor(ink); isChecked = checked
+        setPadding(0, dp(8), 0, dp(2))
         setOnCheckedChangeListener { _, v -> onChange(v) }
     }
 
@@ -291,8 +350,8 @@ class MainActivity : Activity() {
         val views = options.map { opt ->
             TextView(this).apply {
                 text = opt.label
-                textSize = 14f
-                setPadding(dp(14), dp(8), dp(14), dp(8))
+                textSize = 13f
+                setPadding(dp(12), dp(7), dp(12), dp(7))
                 tag = opt.key
                 setOnClickListener { onPick(opt.key); refreshers.forEach { r -> r() } }
                 row.addView(this, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) })
@@ -302,7 +361,7 @@ class MainActivity : Activity() {
             val cur = current()
             views.forEach { v ->
                 val on = v.tag == cur
-                v.background = rounded(if (on) accent else Color.parseColor("#F0ECE5"), 20)
+                v.background = rounded(if (on) accent else chipOff, 20)
                 v.setTextColor(if (on) Color.WHITE else ink)
             }
         }
@@ -318,11 +377,11 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER_HORIZONTAL
                 val dot = View(this@MainActivity)
-                addView(dot, LinearLayout.LayoutParams(dp(38), dp(38)))
-                addView(text(th.label, 11f, muted).apply { gravity = Gravity.CENTER; setPadding(0, dp(4), 0, 0) })
+                addView(dot, LinearLayout.LayoutParams(dp(32), dp(32)))
+                addView(text(th.label, 10f, muted).apply { gravity = Gravity.CENTER; setPadding(0, dp(3), 0, 0) })
                 tag = th to dot
                 setOnClickListener { prefs.theme = th.key; preview.applyPrefs(prefs); refreshers.forEach { it() } }
-                row.addView(this, LinearLayout.LayoutParams(dp(62), ViewGroup.LayoutParams.WRAP_CONTENT))
+                row.addView(this, LinearLayout.LayoutParams(dp(54), ViewGroup.LayoutParams.WRAP_CONTENT))
             }
         }
         val paint = {
@@ -335,7 +394,7 @@ class MainActivity : Activity() {
                 else intArrayOf(th.primary, th.accent)
                 dot.background = GradientDrawable(GradientDrawable.Orientation.TL_BR, colors).apply {
                     shape = GradientDrawable.OVAL
-                    if (prefs.theme == th.key) setStroke(dp(3), ink) else setStroke(dp(1), Color.parseColor("#22000000"))
+                    if (prefs.theme == th.key) setStroke(dp(3), ink) else setStroke(dp(1), Color.parseColor("#33FFFFFF"))
                 }
             }
         }

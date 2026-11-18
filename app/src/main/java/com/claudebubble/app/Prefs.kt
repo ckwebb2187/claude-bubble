@@ -47,6 +47,31 @@ class Prefs(context: Context) {
         get() = sp.getString(KEY_CORE, "orb")!!
         set(v) = sp.edit().putString(KEY_CORE, v).apply()
 
+    /** How it moves while resting: float, bounce, breathe, sway, orbit or still. */
+    var idleMotion: String
+        get() = sp.getString(KEY_IDLE, "float")!!
+        set(v) = sp.edit().putString(KEY_IDLE, v).apply()
+
+    /** Effect while you type or talk: ripples, wave, glow or orbit. */
+    var listenFx: String
+        get() = sp.getString(KEY_LISTEN, "ripples")!!
+        set(v) = sp.edit().putString(KEY_LISTEN, v).apply()
+
+    /** Effect while Claude answers: sparkles, equalizer, spin or shimmer. */
+    var talkFx: String
+        get() = sp.getString(KEY_TALK, "sparkles")!!
+        set(v) = sp.edit().putString(KEY_TALK, v).apply()
+
+    /** Animation speed: slow, normal or fast. */
+    var animSpeed: String
+        get() = sp.getString(KEY_SPEED, "normal")!!
+        set(v) = sp.edit().putString(KEY_SPEED, v).apply()
+
+    /** How the floating chat opens and closes: grow, pop, unroll or fade. */
+    var windowAnim: String
+        get() = sp.getString(KEY_WINDOW, "grow")!!
+        set(v) = sp.edit().putString(KEY_WINDOW, v).apply()
+
     /** Diameter of the orb in dp. */
     var sizeDp: Int
         get() = sp.getInt(KEY_SIZE, Config.BUBBLE_SIZE_DP)
@@ -87,7 +112,8 @@ class Prefs(context: Context) {
 
     fun resetLook() {
         sp.edit().remove(KEY_THEME).remove(KEY_EYES).remove(KEY_BLINK).remove(KEY_PERSONA)
-            .remove(KEY_CORE).remove(KEY_SIZE).remove(KEY_FADE).apply()
+            .remove(KEY_CORE).remove(KEY_SIZE).remove(KEY_FADE).remove(KEY_IDLE).remove(KEY_LISTEN)
+            .remove(KEY_TALK).remove(KEY_SPEED).remove(KEY_WINDOW).apply()
     }
 
     companion object {
@@ -98,6 +124,12 @@ class Prefs(context: Context) {
         const val KEY_CORE = "core"
         const val KEY_SIZE = "size_dp"
         const val KEY_FADE = "fade_idle"
-        val LOOK_KEYS = setOf(KEY_THEME, KEY_EYES, KEY_BLINK, KEY_PERSONA, KEY_CORE, KEY_SIZE, KEY_FADE)
+        const val KEY_IDLE = "idle_motion"
+        const val KEY_LISTEN = "listen_fx"
+        const val KEY_TALK = "talk_fx"
+        const val KEY_SPEED = "anim_speed"
+        const val KEY_WINDOW = "window_anim"
+        val LOOK_KEYS = setOf(KEY_THEME, KEY_EYES, KEY_BLINK, KEY_PERSONA, KEY_CORE, KEY_SIZE, KEY_FADE,
+            KEY_IDLE, KEY_LISTEN, KEY_TALK, KEY_SPEED)
     }
 }

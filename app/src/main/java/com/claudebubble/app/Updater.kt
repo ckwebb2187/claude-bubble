@@ -56,7 +56,7 @@ object Updater {
                         val name = a.optString("name")
                         val m = Regex("""^ClaudeBubble-(.+)-code(\d+)\.apk$""").find(name) ?: continue
                         val url = a.optString("browser_download_url")
-                        if (!url.startsWith("https://github.com/${Config.UPDATE_REPO}/releases/download/")) continue
+                        if (!url.startsWith("https://github.com/${Config.UPDATE_REPO}/releases/download/", ignoreCase = true)) continue
                         val r = Release(m.groupValues[2].toInt(), m.groupValues[1], url, a.optLong("size"))
                         if (best == null || r.versionCode > best.versionCode) best = r
                     }
