@@ -69,20 +69,20 @@ class Prefs(context: Context) {
 
     /** Where and how big the floating chat is, in pixels (-1 = not set yet, use the default). */
     var panelX: Int
-        get() = sp.getInt("panel_x", -1)
-        set(v) = sp.edit().putInt("panel_x", v).apply()
+        get() = sp.getInt("panel2_x", -1)
+        set(v) = sp.edit().putInt("panel2_x", v).apply()
     var panelY: Int
-        get() = sp.getInt("panel_y", -1)
-        set(v) = sp.edit().putInt("panel_y", v).apply()
+        get() = sp.getInt("panel2_y", -1)
+        set(v) = sp.edit().putInt("panel2_y", v).apply()
     var panelW: Int
-        get() = sp.getInt("panel_w", -1)
-        set(v) = sp.edit().putInt("panel_w", v).apply()
+        get() = sp.getInt("panel2_w", -1)
+        set(v) = sp.edit().putInt("panel2_w", v).apply()
     var panelH: Int
-        get() = sp.getInt("panel_h", -1)
-        set(v) = sp.edit().putInt("panel_h", v).apply()
+        get() = sp.getInt("panel2_h", -1)
+        set(v) = sp.edit().putInt("panel2_h", v).apply()
 
     fun resetPanel() {
-        sp.edit().remove("panel_x").remove("panel_y").remove("panel_w").remove("panel_h").apply()
+        sp.edit().remove("panel2_x").remove("panel2_y").remove("panel2_w").remove("panel2_h").apply()
     }
 
     fun resetLook() {

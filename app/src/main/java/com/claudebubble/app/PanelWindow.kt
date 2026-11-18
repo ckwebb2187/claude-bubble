@@ -1,5 +1,7 @@
 package com.claudebubble.app
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
 import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.Context
@@ -9,19 +11,23 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
+import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewAnimationUtils
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowManager
+import android.view.animation.DecelerateInterpolator
 import android.view.inputmethod.InputMethodManager
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
@@ -41,24 +47,28 @@ import android.widget.TextView
 import android.widget.Toast
 import java.io.ByteArrayOutputStream
 import java.io.File
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
  * The floating chat: Claude Duet on the web (claude.ai/messages) in a window over your apps.
- * Pop it open from the bubble, tuck it away again; it stays loaded (and signed in) while tucked,
- * so an answer keeps coming in and the bubble keeps animating.
  *
- * It also watches the page so the bubble can react: you typing (or using your keyboard's mic),
- * and Claude answering.
+ * It's part of the bubble rather than a separate box: it grows out of the bubble, the bubble
+ * docks into its top bar (same theme colors) and keeps reacting there, dragging the bubble
+ * drags the whole window, and tapping the bubble folds the window back into it.
+ * It stays loaded (and signed in) while tucked, so an answer keeps coming in and the bubble
+ * keeps animating. Dark mode throughout.
  */
 class PanelWindow(
     private val ctx: Context,
     private val wm: WindowManager,
     private val prefs: Prefs,
     private val area: () -> Rect,
-    private val topGap: () -> Int,
+    /** The bubble's drawn size and its window's size, in px. */
+    private val orbSize: () -> Int,
+    private val bubbleWindow: () -> Int,
     private val listener: Listener,
 ) {
     interface Listener {
@@ -66,6 +76,8 @@ class PanelWindow(
         fun onActivity(state: String)
         fun onTuckRequested()
         fun onOpenApp()
+        /** The window moved or changed size: re-dock the bubble. */
+        fun onPanelMoved()
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -76,34 +88,54 @@ class PanelWindow(
 
     private var root: PanelRoot? = null
     private var card: LinearLayout? = null
+    private var bar: LinearLayout? = null
+    private var subtitle: TextView? = null
     private var web: WebView? = null
     private lateinit var lp: WindowManager.LayoutParams
     private var lastState = "idle"
+    private var dockRight = true
+    private var theme: Theme = Themes.byKey(prefs.theme)
+    private var reveal: Animator? = null
 
     private val answerTimeout = Runnable { setState("idle") }
+
+    /** Room around the card for its shadow. */
+    private val pad get() = dp(12)
+    private val headerH get() = dp(56)
+    /** Gap between the card's edge and the docked bubble. */
+    private val dockInset get() = dp(10)
 
     // ---------- Window ----------
 
     /** Adds the (hidden) window and starts loading Duet, so the first open is quick. Returns true if newly added. */
     fun ensureCreated(): Boolean {
         if (root != null) return false
-        val r = PanelRoot(ctx)
+        val r = PanelRoot(ctx).apply { setPadding(pad, pad, pad, pad); clipToPadding = false }
         val c = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            background = GradientDrawable().apply { cornerRadius = dp(18).toFloat(); setColor(Color.parseColor("#1F1E1B")) }
             clipToOutline = true
+            elevation = dp(9).toFloat()
         }
-        c.addView(header(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)))
+        val b = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        bar = b
+        c.addView(b, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, headerH))
         val w = buildWeb()
         c.addView(w, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         r.addView(c, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        r.addView(grip(), FrameLayout.LayoutParams(dp(34), dp(34), Gravity.BOTTOM or Gravity.END))
+        r.addView(grip().apply { translationZ = dp(10).toFloat() },
+            FrameLayout.LayoutParams(dp(34), dp(34), Gravity.BOTTOM or Gravity.END))
+        card = c
+        buildHeader()
+        paint()
 
         // Keep the text box above the keyboard even if the system doesn't resize the window.
         r.setOnApplyWindowInsetsListener { _, ins ->
             if (Build.VERSION.SDK_INT >= 30) {
                 val ime = ins.getInsets(WindowInsets.Type.ime()).bottom
-                c.setPadding(0, 0, 0, ime)
+                c.setPadding(0, 0, 0, max(0, ime - pad))
             }
             ins
         }
@@ -120,7 +152,7 @@ class PanelWindow(
         }
         applyGeometry(update = false)
         c.alpha = 0f
-        root = r; card = c; web = w
+        root = r; web = w
         wm.addView(r, lp)
         w.loadUrl(Config.WEB_URL)
         return true
@@ -135,25 +167,75 @@ class PanelWindow(
         WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
             WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
 
-    fun expand(bubbleOnRight: Boolean) {
+    /** Which side of the window the bubble docks on (its own side of the screen). */
+    fun setDock(right: Boolean, force: Boolean = false) {
+        if (!force && right == dockRight && (bar?.childCount ?: 0) > 0) return
+        dockRight = right
+        buildHeader()
+        paint()
+    }
+
+    /** Matches the window's top bar and edge glow to the bubble's theme. */
+    fun applyTheme(t: Theme) {
+        theme = t
+        paint()
+    }
+
+    /** Where the bubble's window goes so the bubble sits in the top bar: its top-left, in px. */
+    fun dockPoint(): Pair<Int, Int> {
+        val (cx, cy) = dockCenterOnScreen()
+        val win = bubbleWindow()
+        return (cx - win / 2) to (cy - win / 2)
+    }
+
+    private fun dockCenterOnScreen(): Pair<Int, Int> {
+        val (cx, cy) = dockCenterInCard()
+        return (lp.x + pad + cx) to (lp.y + pad + cy)
+    }
+
+    /** The bubble's center relative to the card: the point the window grows out of. */
+    private fun dockCenterInCard(): Pair<Int, Int> {
+        val cardW = lp.width - pad * 2
+        val half = orbSize() / 2
+        val cx = if (dockRight) cardW - dockInset - half else dockInset + half
+        return cx to headerH / 2
+    }
+
+    /** Grows the window out of the bubble. */
+    fun expand(delayMs: Long = 0) {
         ensureCreated()
         val r = root ?: return
-        val c = card ?: return
         expanded = true
         applyGeometry(update = false)
         lp.flags = shownFlags()
         lp.alpha = 1f
         runCatching { wm.updateViewLayout(r, lp) }
         runJs("window.__cbTucked=false;")
-        c.pivotX = if (bubbleOnRight) lp.width.toFloat() else 0f
-        c.pivotY = 0f
-        c.animate().cancel()
-        c.scaleX = 0.88f; c.scaleY = 0.88f
-        c.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(170).start()
+        main.postDelayed({ if (expanded) growIn() }, delayMs)
         web?.requestFocus()
     }
 
-    /** Hides the window but keeps the page running, so answers keep streaming in. */
+    private fun growIn() {
+        val c = card ?: return
+        if (c.width == 0 || !c.isAttachedToWindow) { c.post { if (expanded) growIn() }; return }
+        val (ox, oy) = dockCenterInCard()
+        reveal?.cancel()
+        c.animate().cancel()
+        c.pivotX = ox.toFloat(); c.pivotY = oy.toFloat()
+        c.scaleX = 0.82f; c.scaleY = 0.82f
+        c.alpha = 1f
+        c.animate().scaleX(1f).scaleY(1f).setDuration(300).setInterpolator(DecelerateInterpolator(1.6f)).start()
+        val end = farthestCorner(c, ox, oy)
+        reveal = runCatching {
+            ViewAnimationUtils.createCircularReveal(c, ox, oy, orbSize() / 2f, end).apply {
+                duration = 300
+                interpolator = DecelerateInterpolator(1.4f)
+                start()
+            }
+        }.getOrNull()
+    }
+
+    /** Folds the window back into the bubble; the page keeps running, so answers keep streaming in. */
     fun collapse() {
         val r = root ?: return
         val c = card ?: return
@@ -163,22 +245,46 @@ class PanelWindow(
         runCatching {
             ctx.getSystemService(InputMethodManager::class.java)?.hideSoftInputFromWindow(r.windowToken, 0)
         }
-        c.animate().cancel()
-        c.animate().alpha(0f).scaleX(0.88f).scaleY(0.88f).setDuration(140).withEndAction {
+        val hide = Runnable {
             if (!expanded) {
+                c.alpha = 0f
                 lp.flags = hiddenFlags()
                 lp.alpha = 0f
                 runCatching { wm.updateViewLayout(r, lp) }
             }
-        }.start()
+        }
+        val (ox, oy) = dockCenterInCard()
+        reveal?.cancel()
+        c.animate().cancel()
+        c.pivotX = ox.toFloat(); c.pivotY = oy.toFloat()
+        c.animate().scaleX(0.82f).scaleY(0.82f).setDuration(210).start()
+        val anim = runCatching {
+            ViewAnimationUtils.createCircularReveal(c, ox, oy, farthestCorner(c, ox, oy), orbSize() / 2f).apply {
+                duration = 210
+                interpolator = DecelerateInterpolator()
+                addListener(object : AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: Animator) { hide.run() }
+                })
+                start()
+            }
+        }.getOrNull()
+        reveal = anim
+        if (anim == null) c.animate().alpha(0f).setDuration(180).withEndAction(hide).start()
+    }
+
+    private fun farthestCorner(v: View, x: Int, y: Int): Float {
+        val w = v.width.toFloat(); val h = v.height.toFloat()
+        return max(max(hypot(x.toFloat(), y.toFloat()), hypot(w - x, y.toFloat())),
+            max(hypot(x.toFloat(), h - y), hypot(w - x, h - y)))
     }
 
     fun destroy() {
         main.removeCallbacksAndMessages(null)
+        reveal?.cancel()
         root?.let { runCatching { wm.removeView(it) } }
         web?.let { runCatching { it.stopLoading(); it.destroy() } }
         CookieManager.getInstance().flush()
-        root = null; card = null; web = null
+        root = null; card = null; web = null; bar = null; subtitle = null
         expanded = false
     }
 
@@ -200,29 +306,49 @@ class PanelWindow(
 
     // ---------- Geometry ----------
 
+    /** Highest the window may sit while the docked bubble stays fully on screen. */
+    private fun minY(): Int = max(0, bubbleWindow() / 2 - pad - headerH / 2)
+
     private fun applyGeometry(update: Boolean = true) {
         val a = area()
-        val margin = dp(8)
-        val minW = min(dp(260), a.width())
-        val minH = min(dp(300), a.height())
+        val margin = dp(2)
+        val minW = min(dp(270), a.width())
+        val minH = min(dp(320), a.height())
+        val top = minY()
         var w = prefs.panelW; var h = prefs.panelH; var x = prefs.panelX; var y = prefs.panelY
         if (w <= 0 || h <= 0 || x < 0 || y < 0) {
             w = a.width() - margin * 2
-            y = topGap() + dp(4)
-            h = ((a.height() - y) * 0.8f).roundToInt()
+            y = top + dp(4)
+            h = ((a.height() - y) * 0.84f).roundToInt()
             x = margin
         }
         w = w.coerceIn(minW, a.width())
-        h = h.coerceIn(minH, a.height())
+        h = h.coerceIn(minH, max(minH, a.height() - top))
         x = x.coerceIn(0, max(0, a.width() - w))
-        y = y.coerceIn(0, max(0, a.height() - h))
+        y = y.coerceIn(top, max(top, a.height() - h))
         lp.x = x; lp.y = y; lp.width = w; lp.height = h
         if (update) root?.let { runCatching { wm.updateViewLayout(it, lp) } }
+        listener.onPanelMoved()
     }
 
     private fun saveGeometry() {
         prefs.panelX = lp.x; prefs.panelY = lp.y; prefs.panelW = lp.width; prefs.panelH = lp.height
     }
+
+    /** Moves the whole window (dragging the bubble or the top bar). */
+    fun moveTo(x: Int, y: Int) {
+        if (root == null) return
+        val a = area()
+        lp.x = x.coerceIn(0, max(0, a.width() - lp.width))
+        lp.y = y.coerceIn(minY(), max(minY(), a.height() - lp.height))
+        root?.let { runCatching { wm.updateViewLayout(it, lp) } }
+        listener.onPanelMoved()
+    }
+
+    val windowX get() = if (root == null) 0 else lp.x
+    val windowY get() = if (root == null) 0 else lp.y
+
+    fun saveWhere() { if (root != null) saveGeometry() }
 
     /** Re-fit the window to the screen (after a rotation, say). */
     fun relayout() { if (root != null) applyGeometry() }
@@ -232,52 +358,104 @@ class PanelWindow(
         if (root != null) applyGeometry()
     }
 
-    // ---------- Header and grip ----------
+    // ---------- Look: dark, in the bubble's colors ----------
+
+    private fun mix(c: Int, toward: Int, f: Float): Int = Color.rgb(
+        (Color.red(c) + (Color.red(toward) - Color.red(c)) * f).roundToInt(),
+        (Color.green(c) + (Color.green(toward) - Color.green(c)) * f).roundToInt(),
+        (Color.blue(c) + (Color.blue(toward) - Color.blue(c)) * f).roundToInt(),
+    )
+
+    private fun themeColors(): Pair<Int, Int> =
+        if (theme.key == Themes.RAINBOW) Color.parseColor("#F472B6") to Color.parseColor("#38BDF8")
+        else theme.primary to theme.accent
+
+    private fun paint() {
+        val c = card ?: return
+        val (p, a) = themeColors()
+        val ink = Color.parseColor("#141311")
+        c.background = GradientDrawable().apply {
+            cornerRadius = dp(22).toFloat()
+            setColor(BODY)
+            setStroke(dp(1), (mix(p, ink, 0.25f) and 0x00FFFFFF) or 0x8C000000.toInt())
+        }
+        // The top bar runs from the bubble's color on its side to the accent on the other.
+        val near = mix(p, ink, 0.58f)
+        val far = mix(a, ink, 0.66f)
+        bar?.background = GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            if (dockRight) intArrayOf(far, near) else intArrayOf(near, far)
+        )
+        root?.invalidate()
+    }
+
+    // ---------- Top bar and grip ----------
 
     @SuppressLint("ClickableViewAccessibility")
-    private fun header(): View {
-        val bar = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(14), 0, dp(4), 0)
-            setBackgroundColor(Color.parseColor("#2A2925"))
+    private fun buildHeader() {
+        val b = bar ?: return
+        b.removeAllViews()
+        // Room for the docked bubble on its side; the buttons go on the other side.
+        val dockRoom = dockInset * 2 + orbSize()
+        val titles = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = if (dockRight) Gravity.END else Gravity.START
         }
-        bar.addView(View(ctx).apply {
-            background = GradientDrawable().apply { cornerRadius = dp(3).toFloat(); setColor(Color.parseColor("#55FFFFFF")) }
-        }, LinearLayout.LayoutParams(dp(22), dp(4)).apply { marginEnd = dp(10) })
-        bar.addView(TextView(ctx).apply {
+        titles.addView(TextView(ctx).apply {
             text = "Claude Duet"
-            textSize = 14f
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
-        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        })
+        val sub = TextView(ctx).apply {
+            text = subtitleFor(lastState)
+            textSize = 11.5f
+            setTextColor(Color.parseColor("#C8FFFFFF"))
+        }
+        titles.addView(sub)
+        subtitle = sub
         fun btn(label: String, desc: String, onClick: () -> Unit) = TextView(ctx).apply {
             text = label
             contentDescription = desc
             textSize = 18f
             gravity = Gravity.CENTER
-            setTextColor(Color.parseColor("#E8E4DC"))
+            setTextColor(Color.parseColor("#F2EEE6"))
             setOnClickListener { onClick() }
-        }.also { bar.addView(it, LinearLayout.LayoutParams(dp(42), dp(42))) }
-        btn("⟳", "Reload") { web?.reload() }
-        btn("↗", "Open the app") { listener.onOpenApp() }
-        btn("⌄", "Tuck away") { listener.onTuckRequested() }
+        }
+        val buttons = listOf(
+            btn("⟳", "Reload") { web?.reload() },
+            btn("↗", "Open the app") { listener.onOpenApp() },
+            btn("⌄", "Tuck away") { listener.onTuckRequested() },
+        )
+        val titleLp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        if (dockRight) {
+            b.setPadding(dp(4), 0, 0, 0)
+            buttons.reversed().forEach { b.addView(it, LinearLayout.LayoutParams(dp(40), dp(44))) }
+            b.addView(titles, titleLp)
+            b.addView(View(ctx), LinearLayout.LayoutParams(dockRoom, 1))
+        } else {
+            b.setPadding(0, 0, dp(4), 0)
+            b.addView(View(ctx), LinearLayout.LayoutParams(dockRoom, 1))
+            b.addView(titles, titleLp)
+            buttons.forEach { b.addView(it, LinearLayout.LayoutParams(dp(40), dp(44))) }
+        }
 
-        // Drag the header to move the window.
+        // Drag the top bar to move the window (the bubble comes along).
         var downX = 0f; var downY = 0f; var startX = 0; var startY = 0
-        bar.setOnTouchListener { _, e ->
+        b.setOnTouchListener { _, e ->
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> { downX = e.rawX; downY = e.rawY; startX = lp.x; startY = lp.y }
-                MotionEvent.ACTION_MOVE -> {
-                    val a = area()
-                    lp.x = (startX + (e.rawX - downX)).roundToInt().coerceIn(0, max(0, a.width() - lp.width))
-                    lp.y = (startY + (e.rawY - downY)).roundToInt().coerceIn(0, max(0, a.height() - lp.height))
-                    root?.let { runCatching { wm.updateViewLayout(it, lp) } }
-                }
+                MotionEvent.ACTION_MOVE -> moveTo((startX + (e.rawX - downX)).roundToInt(), (startY + (e.rawY - downY)).roundToInt())
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> saveGeometry()
             }
             true
         }
-        return bar
+    }
+
+    private fun subtitleFor(s: String) = when (s) {
+        "typing" -> "Listening…"
+        "answering" -> "Answering…"
+        else -> "Tap me to tuck away"
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -286,8 +464,8 @@ class PanelWindow(
             text = "◢"
             textSize = 16f
             gravity = Gravity.BOTTOM or Gravity.END
-            setPadding(0, 0, dp(6), dp(4))
-            setTextColor(Color.parseColor("#77FFFFFF"))
+            setPadding(0, 0, dp(8), dp(6))
+            setTextColor(Color.parseColor("#66FFFFFF"))
             contentDescription = "Resize"
         }
         var downX = 0f; var downY = 0f; var startW = 0; var startH = 0
@@ -296,9 +474,10 @@ class PanelWindow(
                 MotionEvent.ACTION_DOWN -> { downX = e.rawX; downY = e.rawY; startW = lp.width; startH = lp.height }
                 MotionEvent.ACTION_MOVE -> {
                     val a = area()
-                    lp.width = (startW + (e.rawX - downX)).roundToInt().coerceIn(min(dp(240), a.width()), a.width() - lp.x)
-                    lp.height = (startH + (e.rawY - downY)).roundToInt().coerceIn(min(dp(260), a.height()), a.height() - lp.y)
+                    lp.width = (startW + (e.rawX - downX)).roundToInt().coerceIn(min(dp(250), a.width()), max(min(dp(250), a.width()), a.width() - lp.x))
+                    lp.height = (startH + (e.rawY - downY)).roundToInt().coerceIn(min(dp(280), a.height()), max(min(dp(280), a.height()), a.height() - lp.y))
                     root?.let { runCatching { wm.updateViewLayout(it, lp) } }
+                    listener.onPanelMoved()
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> saveGeometry()
             }
@@ -311,8 +490,10 @@ class PanelWindow(
 
     @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
     private fun buildWeb(): WebView {
-        val w = WebView(ctx)
-        w.setBackgroundColor(Color.parseColor("#1F1E1B"))
+        // A dark theme on the WebView's context makes the page see prefers-color-scheme: dark,
+        // so Claude shows its own dark theme.
+        val w = WebView(ContextThemeWrapper(ctx, android.R.style.Theme_Material_NoActionBar))
+        w.setBackgroundColor(BODY)
         w.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -328,6 +509,12 @@ class PanelWindow(
             allowFileAccess = false
             allowContentAccess = true
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            // Dark mode: the page's own dark theme first, and darken anything that has none.
+            if (Build.VERSION.SDK_INT >= 33) {
+                isAlgorithmicDarkeningAllowed = true
+            } else if (Build.VERSION.SDK_INT >= 29) {
+                @Suppress("DEPRECATION") forceDark = WebSettings.FORCE_DARK_ON
+            }
         }
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, true)
@@ -474,6 +661,7 @@ class PanelWindow(
         if (s == "answering") main.postDelayed(answerTimeout, 8000) // the page pings while it's still answering
         if (s == lastState && s != "done") return
         lastState = if (s == "done") "idle" else s
+        subtitle?.text = subtitleFor(lastState)
         listener.onActivity(s)
     }
 
@@ -492,6 +680,9 @@ class PanelWindow(
     private fun dp(v: Int): Int = (v * ctx.resources.displayMetrics.density).roundToInt()
 
     companion object {
+        /** The chat's dark body color (matches Claude's dark theme). */
+        private val BODY = Color.parseColor("#262624")
+
         /** Pauses media and speech, and blocks new playback while tucked away. */
         private const val HUSH_JS = """
 (function(){try{

@@ -96,6 +96,8 @@ class BubbleService : Service(), SharedPreferences.OnSharedPreferenceChangeListe
     private val panelOpen get() = panel?.expanded == true
     private var guard: AudioGuard? = null
     private var bubbleMove: ValueAnimator? = null
+    /** True while the bubble glides into the window's top bar. */
+    private var docking = false
 
     private val updateCheck = object : Runnable {
         override fun run() {
@@ -176,9 +178,12 @@ class BubbleService : Service(), SharedPreferences.OnSharedPreferenceChangeListe
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         companion?.post {
-            placeFromPrefs()
-            if (panelOpen) moveBubbleToTop()
-            panel?.relayout()
+            if (panelOpen) {
+                panel?.relayout()   // re-docks the bubble too
+            } else {
+                placeFromPrefs()
+                panel?.relayout()
+            }
         }
     }
 
@@ -186,10 +191,12 @@ class BubbleService : Service(), SharedPreferences.OnSharedPreferenceChangeListe
         if (key !in Prefs.LOOK_KEYS) return
         val view = companion ?: return
         view.applyPrefs(prefs)
+        if (key == Prefs.KEY_THEME) panel?.applyTheme(Themes.byKey(prefs.theme))
         if (key == Prefs.KEY_SIZE) {
             bubbleParams.width = windowSize
             bubbleParams.height = windowSize
-            placeFromPrefs()
+            panel?.setDock(prefs.onRight, force = true)
+            if (panelOpen) panel?.relayout() else placeFromPrefs()
         }
         if (key == Prefs.KEY_FADE) wake()
     }
@@ -271,10 +278,15 @@ class BubbleService : Service(), SharedPreferences.OnSharedPreferenceChangeListe
         if (prefs.fadeIdle) main.postDelayed(fadeRunnable, Config.FADE_AFTER_SECONDS * 1000L)
     }
 
+    private fun homeX(): Int {
+        val area = usableArea()
+        val x = if (prefs.onRight) area.width() - windowSize + pad - edgeGap else -pad + edgeGap
+        return x.coerceIn(0, (area.width() - windowSize).coerceAtLeast(0))
+    }
+
     private fun placeFromPrefs(update: Boolean = true) {
         val area = usableArea()
-        bubbleParams.x = if (prefs.onRight) area.width() - windowSize + pad - edgeGap else -pad + edgeGap
-        bubbleParams.x = bubbleParams.x.coerceIn(0, (area.width() - windowSize).coerceAtLeast(0))
+        bubbleParams.x = homeX()
         val maxY = (area.height() - windowSize).coerceAtLeast(0)
         bubbleParams.y = (prefs.yFraction * maxY).roundToInt().coerceIn(0, maxY)
         companion?.restingOnRight = prefs.onRight
@@ -321,6 +333,10 @@ class BubbleService : Service(), SharedPreferences.OnSharedPreferenceChangeListe
         private var flips = 0
         private var flipStart = 0L
         private var travel = 0f
+        // dragging the open window by its bubble
+        private var movingPanel = false
+        private var panelStartX = 0
+        private var panelStartY = 0
 
         private val holdRunnable = Runnable {
             if (!dragging) {
@@ -344,6 +360,9 @@ class BubbleService : Service(), SharedPreferences.OnSharedPreferenceChangeListe
                     dragging = false
                     held = false
                     flips = 0; lastDir = 0; travel = 0f
+                    movingPanel = panelOpen
+                    panelStartX = panel?.windowX ?: 0
+                    panelStartY = panel?.windowY ?: 0
                     c.touchDown()
                     main.postDelayed(holdRunnable, longPress)
                 }
@@ -353,9 +372,16 @@ class BubbleService : Service(), SharedPreferences.OnSharedPreferenceChangeListe
                     if (!dragging && !held && hypot(dx, dy) > slop) {
                         dragging = true
                         main.removeCallbacks(holdRunnable)
-                        showTarget()
+                        if (!movingPanel) showTarget()
                     }
-                    if (dragging) {
+                    if (dragging && movingPanel) {
+                        // The bubble is the window's handle: the whole window comes along.
+                        bubbleMove?.cancel()
+                        panel?.moveTo((panelStartX + dx).roundToInt(), (panelStartY + dy).roundToInt())
+                        val mx = e.rawX - lastX; val my = e.rawY - lastY
+                        c.dragging(mx, my)
+                        lastX = e.rawX; lastY = e.rawY
+                    } else if (dragging) {
                         bubbleParams.x = (startX + dx).roundToInt()
                         bubbleParams.y = (startY + dy).roundToInt().coerceAtLeast(0)
                         runCatching { wm.updateViewLayout(v, bubbleParams) }
@@ -407,6 +433,12 @@ class BubbleService : Service(), SharedPreferences.OnSharedPreferenceChangeListe
         private fun endDrag(c: CompanionView) {
             dragging = false
             c.setScared(false)
+            if (movingPanel) {
+                movingPanel = false
+                panel?.saveWhere()
+                c.landed()
+                return
+            }
             if (overTarget) dismiss() else { removeTarget(); snapToEdge() }
         }
     }
@@ -477,7 +509,7 @@ class BubbleService : Service(), SharedPreferences.OnSharedPreferenceChangeListe
         if (capturing) return
         capturing = true
         closeMenu()
-        if (panelOpen) panel?.collapse()
+        if (panelOpen) tuckPanel()
         // Ask while the bubble is still showing (Android lets apps with a visible bubble open screens),
         // then hide it so it stays out of the screenshot.
         try {
@@ -545,7 +577,10 @@ class BubbleService : Service(), SharedPreferences.OnSharedPreferenceChangeListe
     }
 
     private fun expandPanel() {
-        val p = panel ?: PanelWindow(this, wm, prefs, ::usableArea, { windowSize }, panelListener).also { panel = it }
+        val p = panel ?: PanelWindow(this, wm, prefs, ::usableArea, { orbSize }, { windowSize }, panelListener)
+            .also { panel = it }
+        p.setDock(prefs.onRight)
+        p.applyTheme(Themes.byKey(prefs.theme))
         if (p.ensureCreated()) {
             // The chat window was just added on top; put the bubble back above it.
             companion?.let { v -> runCatching { wm.removeView(v); wm.addView(v, bubbleParams) } }
@@ -553,14 +588,22 @@ class BubbleService : Service(), SharedPreferences.OnSharedPreferenceChangeListe
         companion?.unread = false
         main.removeCallbacks(fadeRunnable)
         companion?.animate()?.alpha(1f)?.setDuration(120)?.start()
-        moveBubbleToTop()
-        p.expand(prefs.onRight)
+        // The bubble glides into the window's top bar while the window grows out of it.
+        docking = true
+        p.expand(delayMs = 60)
+        val (x, y) = p.dockPoint()
+        moveBubble(x, y, 240) {
+            docking = false
+            if (panelOpen) dockBubble()
+        }
     }
 
     private fun tuckPanel() {
         panel?.collapse()
         companion?.activity = "idle"
-        moveBubble(homeY())
+        docking = false
+        // Let the window fold into the bubble, then the bubble heads home.
+        main.postDelayed({ if (!panelOpen) moveBubble(homeX(), homeY(), 260) }, 150)
         wake()
     }
 
@@ -569,19 +612,35 @@ class BubbleService : Service(), SharedPreferences.OnSharedPreferenceChangeListe
         return (prefs.yFraction * maxY).roundToInt().coerceIn(0, maxY)
     }
 
-    /** Like Messenger: the bubble sits at the top while its chat is open. */
-    private fun moveBubbleToTop() = moveBubble(0)
-
-    private fun moveBubble(toY: Int) {
+    /** Puts the bubble right into the open window's top bar. */
+    private fun dockBubble() {
+        val p = panel ?: return
         val view = companion ?: return
         bubbleMove?.cancel()
-        bubbleMove = ValueAnimator.ofInt(bubbleParams.y, toY).apply {
-            duration = 220
-            interpolator = DecelerateInterpolator()
+        val (x, y) = p.dockPoint()
+        bubbleParams.x = x; bubbleParams.y = y
+        runCatching { wm.updateViewLayout(view, bubbleParams) }
+    }
+
+    private fun moveBubble(toX: Int, toY: Int, ms: Long, onEnd: (() -> Unit)? = null) {
+        val view = companion ?: return
+        bubbleMove?.cancel()
+        snapAnimator?.cancel()
+        val fromX = bubbleParams.x; val fromY = bubbleParams.y
+        bubbleMove = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = ms
+            interpolator = DecelerateInterpolator(1.5f)
             addUpdateListener {
-                bubbleParams.y = it.animatedValue as Int
+                val f = it.animatedValue as Float
+                bubbleParams.x = (fromX + (toX - fromX) * f).roundToInt()
+                bubbleParams.y = (fromY + (toY - fromY) * f).roundToInt()
                 runCatching { wm.updateViewLayout(view, bubbleParams) }
             }
+            if (onEnd != null) addListener(object : android.animation.AnimatorListenerAdapter() {
+                private var cancelled = false
+                override fun onAnimationCancel(animation: android.animation.Animator) { cancelled = true }
+                override fun onAnimationEnd(animation: android.animation.Animator) { if (!cancelled) onEnd() else docking = false }
+            })
             start()
         }
     }
@@ -602,6 +661,7 @@ class BubbleService : Service(), SharedPreferences.OnSharedPreferenceChangeListe
         }
         override fun onTuckRequested() { if (panelOpen) tuckPanel() }
         override fun onOpenApp() = openApp()
+        override fun onPanelMoved() { if (panelOpen && !docking) dockBubble() }
     }
 
     // ---------- Updates ----------

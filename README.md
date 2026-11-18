@@ -6,10 +6,13 @@ Its look and personality borrow from Nova Apex: color themes, eye styles, blinki
 
 ## What it does
 
-- **Tap** the bubble: pops open the **floating chat**, Claude Duet on the web (claude.ai/messages) in a window
-  over your apps. The bubble moves to the top while it's open, like Messenger. Tap the bubble, the ⌄ button or
-  Back to tuck it away. It stays loaded and signed in while tucked, so an answer keeps coming in.
-  - Drag the window's top bar to move it, the ◢ corner to resize it. ⟳ reloads, ↗ opens the app.
+- **Tap** the bubble: the **floating chat**, Claude Duet on the web (claude.ai/messages), grows out of the bubble
+  over your apps. The bubble docks into the window's top bar, in its theme colors, and keeps reacting there.
+  Tap the bubble, the ⌄ button or Back and the window folds back into it. It stays loaded and signed in while
+  tucked, so an answer keeps coming in.
+  - Drag the bubble or the top bar to move the whole window, the ◢ corner to resize it. ⟳ reloads, ↗ opens the app.
+  - Dark mode: the window is dark and Claude's page shows its dark theme (set Claude's own appearance to
+    System or Dark if it stays light).
   - Sign in with your email and the code Claude sends. Google's sign-in button doesn't work inside an app window.
 - **The bubble reacts to the chat**: it leans in and listens while you type or use your keyboard's mic,
   its mouth moves while Claude answers (even while tucked), and a dot appears when an answer finished while tucked.
