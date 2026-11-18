@@ -12,7 +12,9 @@ Its look and personality borrow from Nova Apex: color themes, eye styles, blinki
   tucked, so an answer keeps coming in.
   - Drag the bubble or the top bar to move the whole window, the ◢ corner to resize it. ⟳ reloads, ↗ opens the app.
   - Dark mode: the window is dark and Claude's page shows its dark theme (set Claude's own appearance to
-    System or Dark if it stays light).
+    System or Dark if it stays light). Your messages, and Claude's where the page shows them as bubbles,
+    take the bubble's theme colors.
+  - The chat shrinks to the space above your keyboard, so the send button stays in reach.
   - Sign in with your email and the code Claude sends. Google's sign-in button doesn't work inside an app window.
 - **The bubble reacts to the chat**: it leans in and listens while you type or use your keyboard's mic,
   its mouth moves while Claude answers (even while tucked), and a dot appears when an answer finished while tucked.

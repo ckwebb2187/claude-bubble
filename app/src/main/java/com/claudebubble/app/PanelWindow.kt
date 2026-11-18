@@ -96,6 +96,9 @@ class PanelWindow(
     private var dockRight = true
     private var theme: Theme = Themes.byKey(prefs.theme)
     private var reveal: Animator? = null
+    private var imeInset = 0
+    private val visRect = Rect()
+    private val loc = IntArray(2)
 
     private val answerTimeout = Runnable { setState("idle") }
 
@@ -132,13 +135,14 @@ class PanelWindow(
         paint()
 
         // Keep the text box above the keyboard even if the system doesn't resize the window.
+        // Keep the message box and send button above the keyboard: the chat shrinks to the
+        // space above it. Two ways of measuring, since overlay windows don't resize on their own.
         r.setOnApplyWindowInsetsListener { _, ins ->
-            if (Build.VERSION.SDK_INT >= 30) {
-                val ime = ins.getInsets(WindowInsets.Type.ime()).bottom
-                c.setPadding(0, 0, 0, max(0, ime - pad))
-            }
+            imeInset = if (Build.VERSION.SDK_INT >= 30) ins.getInsets(WindowInsets.Type.ime()).bottom else 0
+            fitKeyboard()
             ins
         }
+        r.viewTreeObserver.addOnGlobalLayoutListener { fitKeyboard() }
 
         lp = WindowManager.LayoutParams(
             1, 1,
@@ -272,6 +276,26 @@ class PanelWindow(
         if (anim == null) c.animate().alpha(0f).setDuration(180).withEndAction(hide).start()
     }
 
+    /** Pads the chat's bottom by however much of it the keyboard covers. */
+    private fun fitKeyboard() {
+        val r = root ?: return
+        val c = card ?: return
+        var kb = 0
+        if (expanded) {
+            kb = imeInset
+            if (Build.VERSION.SDK_INT >= 30) {
+                r.rootWindowInsets?.let { kb = max(kb, it.getInsets(WindowInsets.Type.ime()).bottom) }
+            }
+            // What's actually visible on screen: the keyboard's top edge.
+            r.getWindowVisibleDisplayFrame(visRect)
+            r.getLocationOnScreen(loc)
+            val covered = loc[1] + r.height - visRect.bottom
+            if (covered > dp(90)) kb = max(kb, covered)
+        }
+        val want = max(0, kb - pad)
+        if (c.paddingBottom != want) c.setPadding(0, 0, 0, want)
+    }
+
     private fun farthestCorner(v: View, x: Int, y: Int): Float {
         val w = v.width.toFloat(); val h = v.height.toFloat()
         return max(max(hypot(x.toFloat(), y.toFloat()), hypot(w - x, y.toFloat())),
@@ -387,6 +411,18 @@ class PanelWindow(
             if (dockRight) intArrayOf(far, near) else intArrayOf(near, far)
         )
         root?.invalidate()
+        themePage()
+    }
+
+    /** Colors the chat's message bubbles to match the bubble's theme, on a dark page. */
+    private fun themePage() {
+        val (p, a) = themeColors()
+        val ink = Color.parseColor("#141311")
+        fun hex(c: Int) = String.format("#%06X", 0xFFFFFF and c)
+        val u1 = hex(mix(p, ink, 0.45f)); val u2 = hex(mix(a, ink, 0.55f))
+        val ai = hex(mix(a, Color.parseColor("#262624"), 0.86f))
+        val link = hex(mix(p, Color.WHITE, 0.35f))
+        runJs("window.__cbTheme && window.__cbTheme('$u1','$u2','$ai','$link');")
     }
 
     // ---------- Top bar and grip ----------
@@ -533,7 +569,11 @@ class PanelWindow(
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
-                if (isOurs(Uri.parse(url ?: "").host)) view.evaluateJavascript(WATCH_JS, null)
+                if (isOurs(Uri.parse(url ?: "").host)) {
+                    view.evaluateJavascript(WATCH_JS, null)
+                    view.evaluateJavascript(THEME_JS, null)
+                    themePage()
+                }
                 if (!expanded) view.evaluateJavascript("window.__cbTucked=true;", null)
                 CookieManager.getInstance().flush()
             }
@@ -682,6 +722,76 @@ class PanelWindow(
     companion object {
         /** The chat's dark body color (matches Claude's dark theme). */
         private val BODY = Color.parseColor("#262624")
+
+        /**
+         * Themes the chat: keeps the page dark, and colors your messages (and Claude's, where the
+         * page draws them as bubbles) in the bubble's theme. Finds the bubbles by how they look
+         * (rounded, colored, sitting on one side), since the page's own class names change.
+         */
+        private const val THEME_JS = """
+(function(){
+  if (window.__cbThemeHooked) return; window.__cbThemeHooked = true;
+  var st = document.createElement('style'); st.id = 'cb-theme';
+  (document.head || document.documentElement).appendChild(st);
+  var seen = new WeakSet(), cols = null, timer = null;
+
+  function keepDark(){
+    var h = document.documentElement;
+    if (h.getAttribute('data-mode') === 'light') h.setAttribute('data-mode', 'dark');
+    if (!h.classList.contains('dark')) h.classList.add('dark');
+  }
+
+  function css(){
+    if (!cols) return;
+    st.textContent =
+      ':root{color-scheme:dark}' +
+      'html,body{background-color:#262624}' +
+      '.cb-ub{background:linear-gradient(135deg,' + cols.u1 + ',' + cols.u2 + ')!important;color:#fff!important;border-color:transparent!important}' +
+      '.cb-ub *{color:inherit!important;background-color:transparent!important}' +
+      '.cb-ab{background:' + cols.ai + '!important;border-color:transparent!important}' +
+      '.cb-ub a,.cb-ab a,.font-claude-message a{color:' + cols.link + '!important}';
+  }
+
+  function transparent(bg){ return !bg || bg === 'transparent' || /rgba\([^)]*,\s*0\)$/.test(bg); }
+
+  function scan(){
+    timer = null;
+    keepDark();
+    var vw = window.innerWidth || document.documentElement.clientWidth;
+    var bodyBg = getComputedStyle(document.body || document.documentElement).backgroundColor;
+    // Known markers first.
+    document.querySelectorAll('[data-testid="user-message"]').forEach(function(m){
+      var el = m;
+      for (var i = 0; i < 5 && el && el !== document.body; i++, el = el.parentElement) {
+        var cs = getComputedStyle(el);
+        if (!transparent(cs.backgroundColor) && cs.backgroundColor !== bodyBg) { el.classList.add('cb-ub'); break; }
+      }
+    });
+    // Then anything shaped like a chat bubble.
+    var els = document.querySelectorAll('main div, [role="log"] div, div[class*="message"]');
+    for (var i = 0; i < els.length && i < 4000; i++) {
+      var el = els[i];
+      if (seen.has(el)) continue;
+      if (el.closest('[contenteditable],form,nav,header,footer,[role="dialog"],[role="menu"]')) { seen.add(el); continue; }
+      if (!(el.textContent || '').trim()) continue;
+      var cs = getComputedStyle(el);
+      if (transparent(cs.backgroundColor) || cs.backgroundColor === bodyBg || parseFloat(cs.borderTopLeftRadius) < 10) { seen.add(el); continue; }
+      if (el.querySelector('input,textarea,button,[contenteditable],img,svg,video')) { seen.add(el); continue; }
+      var r = el.getBoundingClientRect();
+      if (r.width < 40 || r.height < 26 || r.width > vw * 0.88) continue;
+      seen.add(el);
+      if (r.right > vw * 0.86 && r.left > vw * 0.12) el.classList.add('cb-ub');
+      else if (r.left < vw * 0.14 && r.right < vw * 0.88) el.classList.add('cb-ab');
+    }
+  }
+  function soon(){ if (!timer) timer = setTimeout(scan, 500); }
+  new MutationObserver(soon).observe(document.documentElement, {subtree:true, childList:true, attributes:true, attributeFilter:['data-mode','class']});
+  window.addEventListener('resize', soon);
+
+  window.__cbTheme = function(u1, u2, ai, link){ cols = {u1:u1, u2:u2, ai:ai, link:link}; css(); soon(); };
+  keepDark();
+})();
+"""
 
         /** Pauses media and speech, and blocks new playback while tucked away. */
         private const val HUSH_JS = """
