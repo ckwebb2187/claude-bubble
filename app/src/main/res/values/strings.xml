@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Claude Bubble</string>
+    <string name="notif_channel">Bubble</string>
+    <string name="notif_title">Claude bubble is on</string>
+    <string name="notif_text">Tap the bubble for Claude Duet, hold it for more. Drag to the X to hide.</string>
+    <string name="notif_stop">Turn off</string>
+    <string name="notif_look">Look at my screen</string>
+</resources>
