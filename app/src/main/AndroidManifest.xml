@@ -11,7 +11,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Lets the built-in updater hand a new version to Android's installer (you still tap Update). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-    <!-- On purpose, no RECORD_AUDIO: this app can never use the microphone. -->
+    <!-- The mic button in the floating chat. Only ever used while the chat is open and you tapped it;
+         let go of the moment you tuck the chat away, the screen goes off, or an alarm or call starts. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
     <!-- Android 11+ hides other apps unless you name them here. -->
     <queries>
@@ -48,7 +52,7 @@
         <service
             android:name=".BubbleService"
             android:exported="false"
-            android:foregroundServiceType="specialUse|mediaProjection">
+            android:foregroundServiceType="specialUse|mediaProjection|microphone">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Floating shortcut bubble drawn over other apps" />
@@ -59,6 +63,13 @@
             android:exported="false"
             android:excludeFromRecents="true"
             android:noHistory="false"
+            android:taskAffinity=""
+            android:theme="@style/Invisible" />
+
+        <activity
+            android:name=".MicPermissionActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
             android:taskAffinity=""
             android:theme="@style/Invisible" />
 

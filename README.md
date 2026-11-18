@@ -29,8 +29,10 @@ Its look and personality borrow from Nova Apex: color themes, eye styles, blinki
 
 ## Alarms and calls come first
 
-- No microphone permission at all, so the app can never listen, in the foreground or background.
-  To talk to Claude, use your keyboard's mic button.
+- The microphone only works while the floating chat is open and you tap the page's mic button
+  (Android asks you to allow it the first time). The app lets go of it the moment you tuck the chat away,
+  the screen turns off, or an alarm, ringtone or call starts, and never listens in the background.
+  No wake word, no always-on listening. Your keyboard's mic button works too.
 - The app never plays sound or asks for audio focus itself.
 - The chat can't play sound unless you tap something, and goes quiet when you tuck it away or the screen turns off.
 - The moment an alarm, ringtone or call starts, anything playing in the chat is paused.

@@ -152,8 +152,9 @@ class MainActivity : Activity() {
         // ----- Alarm safety -----
         val safe = section(root, "Alarms and calls come first")
         safe.addView(text(
-            "Claude Bubble has no microphone permission, so it can never listen in the background. " +
-            "To talk to Claude, use your keyboard's mic button. The chat can't play sound unless you tap something, " +
+            "The mic only works while the floating chat is open and you tap its mic button. It lets go of the mic " +
+            "the moment you tuck the chat away, the screen turns off, or an alarm or call starts, and it never listens " +
+            "in the background. The chat can't play sound unless you tap something, " +
             "goes quiet when you tuck it away or the screen turns off, and stops any sound the moment an alarm, " +
             "ringtone or call starts.",
             14f, ink))

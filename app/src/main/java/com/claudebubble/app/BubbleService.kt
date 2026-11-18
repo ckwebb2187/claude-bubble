@@ -56,6 +56,7 @@ class BubbleService : Service(), SharedPreferences.OnSharedPreferenceChangeListe
         const val ACTION_CAPTURE = "com.claudebubble.app.action.CAPTURE"
         const val ACTION_SIGN_OUT = "com.claudebubble.app.action.SIGN_OUT"
         const val ACTION_RESET_PANEL = "com.claudebubble.app.action.RESET_PANEL"
+        const val ACTION_OPEN_PANEL = "com.claudebubble.app.action.OPEN_PANEL"
         private const val UPDATE_CHANNEL_ID = "updates"
         private const val UPDATE_NOTIF_ID = 2
         const val EXTRA_RESULT_CODE = "result_code"
@@ -98,6 +99,9 @@ class BubbleService : Service(), SharedPreferences.OnSharedPreferenceChangeListe
     private var bubbleMove: ValueAnimator? = null
     /** True while the bubble glides into the window's top bar. */
     private var docking = false
+    /** The service holds the mic only while the open chat's mic button is in use. */
+    private var micOn = false
+    private var projecting = false
 
     private val updateCheck = object : Runnable {
         override fun run() {
@@ -154,6 +158,7 @@ class BubbleService : Service(), SharedPreferences.OnSharedPreferenceChangeListe
             ACTION_CAPTURE -> onCaptureAnswer(intent)
             ACTION_SIGN_OUT -> panel?.signOut()
             ACTION_RESET_PANEL -> panel?.resetGeometry()
+            ACTION_OPEN_PANEL -> if (!panelOpen && companion != null) expandPanel()
         }
         return START_STICKY
     }
@@ -203,7 +208,8 @@ class BubbleService : Service(), SharedPreferences.OnSharedPreferenceChangeListe
 
     // ---------- Notification ----------
 
-    private fun goForeground(withProjection: Boolean) {
+    private fun goForeground(withProjection: Boolean = projecting) {
+        projecting = withProjection
         val nm = getSystemService(NotificationManager::class.java)!!
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, getString(R.string.notif_channel), NotificationManager.IMPORTANCE_MIN).apply {
@@ -236,6 +242,13 @@ class BubbleService : Service(), SharedPreferences.OnSharedPreferenceChangeListe
             Build.VERSION.SDK_INT >= 34 -> {
                 var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
                 if (withProjection) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                if (micOn) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                startForeground(NOTIF_ID, notification, type)
+            }
+            Build.VERSION.SDK_INT >= 30 && (withProjection || micOn) -> {
+                var type = 0
+                if (withProjection) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                if (micOn) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
                 startForeground(NOTIF_ID, notification, type)
             }
             Build.VERSION.SDK_INT >= 29 && withProjection ->
@@ -662,6 +675,41 @@ class BubbleService : Service(), SharedPreferences.OnSharedPreferenceChangeListe
         override fun onTuckRequested() { if (panelOpen) tuckPanel() }
         override fun onOpenApp() = openApp()
         override fun onPanelMoved() { if (panelOpen && !docking) dockBubble() }
+
+        override fun onMicWanted(): Boolean {
+            if (!panelOpen) return false
+            // Alarms, ringtones and calls come first: no mic while one is going.
+            if (guard?.let { it.alertActive || it.inCall() } == true) {
+                Toast.makeText(this@BubbleService, "Not while an alarm or call is going", Toast.LENGTH_SHORT).show()
+                return false
+            }
+            if (micOn) return true
+            micOn = true
+            return try {
+                goForeground()
+                true
+            } catch (e: Exception) {
+                micOn = false
+                runCatching { goForeground() }
+                Toast.makeText(this@BubbleService, "Android didn't let the chat use the mic just now", Toast.LENGTH_SHORT).show()
+                false
+            }
+        }
+
+        override fun onMicReleased() {
+            if (!micOn) return
+            micOn = false
+            runCatching { goForeground() }
+        }
+
+        override fun onMicPermissionNeeded() {
+            // Tuck the chat so Android's question isn't hidden behind it; it pops back open if you allow.
+            tuckPanel()
+            runCatching {
+                startActivity(Intent(this@BubbleService, MicPermissionActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS))
+            }
+        }
     }
 
     // ---------- Updates ----------

@@ -78,6 +78,12 @@ class PanelWindow(
         fun onOpenApp()
         /** The window moved or changed size: re-dock the bubble. */
         fun onPanelMoved()
+        /** The page wants the mic (you tapped its mic button). Returns false if it mustn't have it now. */
+        fun onMicWanted(): Boolean
+        /** The page stopped using the mic. */
+        fun onMicReleased()
+        /** Android hasn't allowed the mic yet: ask (with the chat tucked so the question shows). */
+        fun onMicPermissionNeeded()
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -318,6 +324,7 @@ class PanelWindow(
      */
     fun hush() {
         runJs(HUSH_JS)
+        listener.onMicReleased()
     }
 
     /** Forget the sign-in (clears this app's cookies and site storage). */
@@ -587,8 +594,16 @@ class PanelWindow(
 
         w.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest) {
-                // This app has no microphone or camera permission, so the page never gets them.
-                request.deny()
+                // Only the mic, only for Claude's page, only while the chat is open. Never the camera.
+                val wantsMic = PermissionRequest.RESOURCE_AUDIO_CAPTURE in request.resources
+                if (!wantsMic || !expanded || !isOurs(request.origin?.host)) { request.deny(); return }
+                if (ctx.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    request.deny()
+                    listener.onMicPermissionNeeded()
+                    return
+                }
+                if (!listener.onMicWanted()) { request.deny(); return }
+                request.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
             }
 
             override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean {
@@ -691,6 +706,7 @@ class PanelWindow(
     private inner class Bridge {
         @JavascriptInterface
         fun state(s: String) {
+            if (s == "micoff") { main.post { listener.onMicReleased() }; return }
             if (s !in setOf("typing", "answering", "idle", "done")) return
             main.post { setState(s) }
         }
@@ -799,6 +815,8 @@ class PanelWindow(
   window.__cbTucked = true;
   document.querySelectorAll('audio,video').forEach(function(m){try{m.pause();}catch(e){}});
   if (window.speechSynthesis) { try{ speechSynthesis.cancel(); }catch(e){} }
+  (window.__cbStreams || []).forEach(function(s){ try{ s.getTracks().forEach(function(t){ t.stop(); }); }catch(e){} });
+  window.__cbStreams = [];
 }catch(e){}})();
 """
 
@@ -823,6 +841,33 @@ class PanelWindow(
     if (window.speechSynthesis) {
       var oSpeak = speechSynthesis.speak.bind(speechSynthesis);
       speechSynthesis.speak = function(u){ if (window.__cbTucked) return; return oSpeak(u); };
+    }
+  } catch(e){}
+
+  // The page's mic: never while tucked; the bubble listens while it's on; let Android know when it's off.
+  window.__cbStreams = window.__cbStreams || [];
+  try {
+    var md = navigator.mediaDevices;
+    if (md && md.getUserMedia) {
+      var oGUM = md.getUserMedia.bind(md);
+      var micT = null;
+      var micLive = function(){
+        return window.__cbStreams.some(function(s){ return s.getAudioTracks().some(function(t){ return t.readyState === 'live'; }); });
+      };
+      var watchMic = function(){
+        if (micT) return;
+        send('typing');
+        micT = setInterval(function(){
+          if (micLive()) { send('typing'); return; }
+          clearInterval(micT); micT = null;
+          window.__cbStreams = [];
+          send('idle'); send('micoff');
+        }, 1500);
+      };
+      md.getUserMedia = function(c){
+        if (window.__cbTucked) return Promise.reject(new DOMException('Tucked away', 'NotAllowedError'));
+        return oGUM(c).then(function(s){ window.__cbStreams.push(s); watchMic(); return s; });
+      };
     }
   } catch(e){}
 
